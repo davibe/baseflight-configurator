@@ -1,0 +1,24 @@
+{
+  "name": "baseflight-configurator",
+  "description": "",
+  "version": "0.0.1",
+  "author": "Davide Bertola <dade@dadeb.it>",
+  "keywords": ["baseflight-configurator"],
+  "window": {
+    "title": "baseflight-configurator",
+    "icon": "link.png",
+    "toolbar": false,
+    "width": 1000,
+    "height": 600
+  },
+  "webkit": {
+    "plugin": true
+  },
+  "dependencies": {
+    "underscore": "*",
+    "uuid-pure": "*",
+    "serialport": "*"
+  },
+  "main": "main.html",
+  "engines": { "node": ">= 0.4.6" }
+}
