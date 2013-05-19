@@ -117,6 +117,7 @@ Connection.prototype = {
     formatters.abdump(data_ab);
     
     var self = this;
+    data = new Buffer(new Uint8Array(data_ab));
     this.port.write(data, function (err, res) {
       if (err) {
         error("There has been an error writing to the port " + self.id);
