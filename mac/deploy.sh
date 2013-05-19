@@ -7,7 +7,7 @@ npm link .
 echo 'Rebuilding node-serialport using nw-gyp..'
 cd node_modules/serialport
 nw-gyp clean
-nw-gyp configure --target=0.5.0
+nw-gyp configure --target=0.5.1
 nw-gyp build
 cd ../..
 
@@ -17,3 +17,7 @@ cp mac/Info.plist mac/baseflight-configurator.app/Contents
 
 zip -x "mac*" "win*" "linux*" -r \
   mac/baseflight-configurator.app/Contents/Resources/app.nw *
+
+cd mac
+zip -r baseflight-configurator.app.zip baseflight-configurator.app
+cd ..
