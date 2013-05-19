@@ -36,7 +36,7 @@ $(document).ready(function() {
             } else if ($(this).parent().hasClass('tab_receiver')) {
                 $('#content').load("./tabs/receiver.html", tab_initialize_receiver);
             } else if ($(this).parent().hasClass('tab_auxiliary_configuration')) {
-                $('#content').load("./tabs/auxiliary_configuration.html", tab_initialize_auxiliary_configuration);
+                tab_load_auxiliary_configuration();
             } else if ($(this).parent().hasClass('tab_motor_outputs')) {
                 $('#content').load("./tabs/motor_outputs.html", tab_initialize_motor_outputs);
             } else if ($(this).parent().hasClass('tab_sensors')) {

@@ -1,3 +1,8 @@
+function tab_load_auxiliary_configuration() {
+  $('#content').load("./tabs/auxiliary_configuration.html",
+      tab_initialize_auxiliary_configuration);
+}
+
 function tab_initialize_auxiliary_configuration() {
     // generate table from the supplied AUX names and AUX data
     for (var i = 0; i < AUX_CONFIG.length; i++) {
@@ -70,6 +75,14 @@ function tab_initialize_auxiliary_configuration() {
             // Save changes to EEPROM
             send_message(MSP_codes.MSP_EEPROM_WRITE, MSP_codes.MSP_EEPROM_WRITE);
             
+            // request an update for AUX_CONFIG_values
+            send_message(MSP_codes.MSP_BOX, MSP_codes.MSP_BOX, function () {
+              // a response has probably been received, we wait for it to be
+              // processed and refresh the user interface
+              setTimeout(function () {
+                tab_load_auxiliary_configuration();
+              }, 100);
+            });
             // remove the active status
             $(this).removeClass('active');
         }
