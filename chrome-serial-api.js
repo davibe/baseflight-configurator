@@ -126,6 +126,7 @@ Connection.prototype = {
         return;
       }
       // We assume all data has been written, for god's sake
+      log("Bytes written: " + res);
       cb({ bytesWritten: res });
     });
   },
