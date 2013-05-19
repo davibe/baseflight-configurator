@@ -342,13 +342,14 @@ function onCharRead(readInfo) {
     }
 }
 
-function send_message(code, data) {        
+function send_message(code, data, cb) {
+    cb = cb || function () {};
     if (typeof data === 'object') {
         var size = 6 + data.length; // 6 bytes for protocol overhead
         var checksum = 0;
         
         var bufferOut = new ArrayBuffer(size);
-        var bufView = new Uint8Array(bufferOut);        
+        var bufView = new Uint8Array(bufferOut);
         
         bufView[0] = 36; // $
         bufView[1] = 77; // M
@@ -379,6 +380,8 @@ function send_message(code, data) {
     }
 
     chrome.serial.write(connectionId, bufferOut, function(writeInfo) {
+        cb(writeInfo);
+
         // used for debugging purposes (should be disabled in "stable" builds
         //console.log("Wrote: " + writeInfo.bytesWritten + " bytes");
     });    
