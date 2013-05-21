@@ -228,7 +228,7 @@ var serial = {
 
   flush: function (connectionId, cb) {
     var connection = this._connections[connectionId];
-    connection.flush(data, cb);
+    connection.flush(cb);
   },
   
   getControlSignals: function (connectionId, cb) {
