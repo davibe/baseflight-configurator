@@ -1,70 +1,194 @@
-function configuration_backup() {
-    // request configuration data
-    send_message(MSP_codes.MSP_IDENT, MSP_codes.MSP_IDENT);
-    send_message(MSP_codes.MSP_STATUS, MSP_codes.MSP_STATUS);
-    send_message(MSP_codes.MSP_PID, MSP_codes.MSP_PID);
-    send_message(MSP_codes.MSP_RC_TUNING, MSP_codes.MSP_RC_TUNING);
-    send_message(MSP_codes.MSP_BOXNAMES, MSP_codes.MSP_BOXNAMES);
-    send_message(MSP_codes.MSP_BOX, MSP_codes.MSP_BOX);
-    send_message(MSP_codes.MSP_ACC_TRIM, MSP_codes.MSP_ACC_TRIM);
+'use strict';
+
+// code below is highly experimental, although it runs fine on latest firmware
+// the data inside nested objects needs to be verified if deep copy works properly
+function configuration_backup(callback) {
+    var activeProfile = null,
+        profilesN = 3;
+
+    var configuration = {
+        'generatedBy': chrome.runtime.getManifest().version,
+        'apiVersion': CONFIG.apiVersion,
+        'profiles': [],
+    };
+
+    MSP.send_message(MSP_codes.MSP_STATUS, false, false, function () {
+        activeProfile = CONFIG.profile;
+        select_profile();
+    });
+
+    function select_profile() {
+        if (activeProfile > 0) {
+            MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [0], false, fetch_specific_data);
+        } else {
+            fetch_specific_data();
+        }
+    }
+
+    var profileSpecificData = [
+        MSP_codes.MSP_PID_CONTROLLER,
+        MSP_codes.MSP_PID,
+        MSP_codes.MSP_RC_TUNING,
+        MSP_codes.MSP_ACC_TRIM,
+        MSP_codes.MSP_SERVO_CONFIGURATIONS,
+        MSP_codes.MSP_MODE_RANGES,
+        MSP_codes.MSP_ADJUSTMENT_RANGES
+    ];
+
+    function update_profile_specific_data_list() {
+        if (semver.lt(CONFIG.apiVersion, "1.12.0")) {
+            profileSpecificData.push(MSP_codes.MSP_CHANNEL_FORWARDING);
+        } else {            
+            profileSpecificData.push(MSP_codes.MSP_SERVO_MIX_RULES);
+        }
+    }
     
-    // applying 200ms delay (should be enough to pull all the data down)
-    // we might increase this in case someone would be using very slow baudrate (ergo 9600 and lower)
-    setTimeout(function() {
-        var chosenFileEntry = null;
+    update_profile_specific_data_list();
+
+    function fetch_specific_data() {
+        var fetchingProfile = 0,
+            codeKey = 0;
+
+        function fetch_specific_data_item() {
+            if (fetchingProfile < profilesN) {
+                MSP.send_message(profileSpecificData[codeKey], false, false, function () {
+                    codeKey++;
+
+                    if (codeKey < profileSpecificData.length) {
+                        fetch_specific_data_item();
+                    } else {
+                        configuration.profiles.push({
+                            'PID': jQuery.extend(true, {}, PID),
+                            'PIDs': jQuery.extend(true, [], PIDs),
+                            'RC': jQuery.extend(true, {}, RC_tuning),
+                            'AccTrim': jQuery.extend(true, [], CONFIG.accelerometerTrims),
+                            'ServoConfig': jQuery.extend(true, [], SERVO_CONFIG),
+                            'ServoRules': jQuery.extend(true, [], SERVO_RULES),
+                            'ModeRanges': jQuery.extend(true, [], MODE_RANGES),
+                            'AdjustmentRanges': jQuery.extend(true, [], ADJUSTMENT_RANGES)
+                        });
+
+                        codeKey = 0;
+                        fetchingProfile++;
+
+                        MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [fetchingProfile], false, fetch_specific_data_item);
+                    }
+                });
+            } else {
+                MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [activeProfile], false, fetch_unique_data);
+            }
+        }
+
+        // start fetching
+        fetch_specific_data_item();
+    }
+
+    var uniqueData = [
+        MSP_codes.MSP_MISC,
+        MSP_codes.MSP_RX_MAP,
+        MSP_codes.MSP_BF_CONFIG,
+        MSP_codes.MSP_CF_SERIAL_CONFIG,
+        MSP_codes.MSP_LED_STRIP_CONFIG
+    ];
+
+    function update_unique_data_list() {
+        if (semver.gte(CONFIG.apiVersion, "1.8.0")) {
+            uniqueData.push(MSP_codes.MSP_LOOP_TIME);
+            uniqueData.push(MSP_codes.MSP_ARMING_CONFIG);
+        }
+    }
+    
+    update_unique_data_list();
+
+    function fetch_unique_data() {
+        var codeKey = 0;
         
+        function fetch_unique_data_item() {
+            if (codeKey < uniqueData.length) {
+                MSP.send_message(uniqueData[codeKey], false, false, function () {
+                    codeKey++;
+                    fetch_unique_data_item();
+                });
+            } else {
+                configuration.MISC = jQuery.extend(true, {}, MISC);
+                configuration.RCMAP = jQuery.extend(true, [], RC_MAP);
+                configuration.BF_CONFIG = jQuery.extend(true, {}, BF_CONFIG);
+                configuration.SERIAL_CONFIG = jQuery.extend(true, {}, SERIAL_CONFIG);
+                configuration.LED_STRIP = jQuery.extend(true, [], LED_STRIP);
+                
+                if (semver.gte(CONFIG.apiVersion, "1.8.0")) {
+                    configuration.FC_CONFIG = jQuery.extend(true, {}, FC_CONFIG);
+                    configuration.ARMING_CONFIG = jQuery.extend(true, {}, ARMING_CONFIG);
+                }
+
+                save();
+            }
+        }
+        
+        // start fetching
+        fetch_unique_data_item();
+    }
+
+    function save() {
+        var chosenFileEntry = null;
+
         var accepts = [{
             extensions: ['txt']
         }];
-        
+
         // generate timestamp for the backup file
-        var d = new Date();
-        var now = d.getUTCFullYear() + '.' + d.getDate() + '.' + (d.getMonth() + 1) + '.' + d.getHours() + '.' + d.getMinutes();  
+        var d = new Date(),
+            now = (d.getMonth() + 1) + '.' + d.getDate() + '.' + d.getFullYear() + '.' + d.getHours() + '.' + d.getMinutes();
 
         // create or load the file
-        chrome.fileSystem.chooseEntry({type: 'saveFile', suggestedName: 'bf_mw_backup_' + now, accepts: accepts}, function(fileEntry) {
-            if (!fileEntry) {
-                console.log('No file selected, backup aborted.');
-                
+        chrome.fileSystem.chooseEntry({type: 'saveFile', suggestedName: 'cleanflight_backup_' + now, accepts: accepts}, function (fileEntry) {
+            if (chrome.runtime.lastError) {
+                console.error(chrome.runtime.lastError.message);
                 return;
             }
-            
-            chosenFileEntry = fileEntry; 
+
+            if (!fileEntry) {
+                console.log('No file selected, backup aborted.');
+                return;
+            }
+
+            chosenFileEntry = fileEntry;
 
             // echo/console log path specified
-            chrome.fileSystem.getDisplayPath(chosenFileEntry, function(path) {
+            chrome.fileSystem.getDisplayPath(chosenFileEntry, function (path) {
                 console.log('Backup file path: ' + path);
             });
 
             // change file entry from read only to read/write
-            chrome.fileSystem.getWritableEntry(chosenFileEntry, function(fileEntryWritable) {
+            chrome.fileSystem.getWritableEntry(chosenFileEntry, function (fileEntryWritable) {
                 // check if file is writable
-                chrome.fileSystem.isWritableEntry(fileEntryWritable, function(isWritable) {
+                chrome.fileSystem.isWritableEntry(fileEntryWritable, function (isWritable) {
                     if (isWritable) {
                         chosenFileEntry = fileEntryWritable;
-                    
-                        // create config object that will be used to store all downloaded data
-                        var configuration = {
-                            VERSION: CONFIG.version, // not really useful yet
-                            PID: PIDs,
-                            AUX_val: AUX_CONFIG_values,
-                            RC: RC_tuning,
-                            AccelTrim: CONFIG.accelerometerTrims
-                        }
-                        
+
                         // crunch the config object
                         var serialized_config_object = JSON.stringify(configuration);
                         var blob = new Blob([serialized_config_object], {type: 'text/plain'}); // first parameter for Blob needs to be an array
-                        
-                        chosenFileEntry.createWriter(function(writer) {
+
+                        chosenFileEntry.createWriter(function (writer) {
                             writer.onerror = function (e) {
                                 console.error(e);
                             };
-                            
-                            writer.onwriteend = function() {
+
+                            var truncated = false;
+                            writer.onwriteend = function () {
+                                if (!truncated) {
+                                    // onwriteend will be fired again when truncation is finished
+                                    truncated = true;
+                                    writer.truncate(blob.size);
+
+                                    return;
+                                }
+
                                 console.log('Write SUCCESSFUL');
+                                if (callback) callback();
                             };
-                            
+
                             writer.write(blob);
                         }, function (e) {
                             console.error(e);
@@ -76,150 +200,439 @@ function configuration_backup() {
                 });
             });
         });
-    }, 200);
+    }
 }
 
-function configuration_restore() {
+function configuration_restore(callback) {
     var chosenFileEntry = null;
-    
+
     var accepts = [{
         extensions: ['txt']
     }];
-    
+
     // load up the file
-    chrome.fileSystem.chooseEntry({type: 'openFile', accepts: accepts}, function(fileEntry) {
-        if (!fileEntry) {
-            console.log('No file selected, restore aborted.');
-            
+    chrome.fileSystem.chooseEntry({type: 'openFile', accepts: accepts}, function (fileEntry) {
+        if (chrome.runtime.lastError) {
+            console.error(chrome.runtime.lastError.message);
             return;
         }
-        
-        chosenFileEntry = fileEntry; 
-        
+
+        if (!fileEntry) {
+            console.log('No file selected, restore aborted.');
+            return;
+        }
+
+        chosenFileEntry = fileEntry;
+
         // echo/console log path specified
-        chrome.fileSystem.getDisplayPath(chosenFileEntry, function(path) {
+        chrome.fileSystem.getDisplayPath(chosenFileEntry, function (path) {
             console.log('Restore file path: ' + path);
-        }); 
+        });
 
         // read contents into variable
-        chosenFileEntry.file(function(file) {
+        chosenFileEntry.file(function (file) {
             var reader = new FileReader();
 
-            reader.onerror = function (e) {
-                console.error(e);
-            };
-            
-            reader.onloadend = function(e) {
-                console.log('Read SUCCESSFUL');
-                
-                try { // check if string provided is a valid JSON
-                    var deserialized_configuration_object = JSON.parse(e.target.result);
-                } catch (e) {
-                    // data provided != valid json object
-                    console.log('Data provided != valid JSON string, restore aborted.');
-                    
-                    return;
+            reader.onprogress = function (e) {
+                if (e.total > 1048576) { // 1 MB
+                    // dont allow reading files bigger then 1 MB
+                    console.log('File limit (1 MB) exceeded, aborting');
+                    reader.abort();
                 }
-                
-                // replacing "old configuration" with configuration from backup file
-                var configuration = deserialized_configuration_object;
-                
-                // some configuration.VERSION code goes here? will see
-                
-                PIDs = configuration.PID;
-                AUX_CONFIG_values = configuration.AUX_val;
-                RC_tuning = configuration.RC;
-                CONFIG.accelerometerTrims = configuration.AccelTrim;
-                
-                // all of the arrays/objects are set, upload changes
-                configuration_upload();
+            };
+
+            reader.onloadend = function (e) {
+                if (e.total != 0 && e.total == e.loaded) {
+                    console.log('Read SUCCESSFUL');
+
+                    try { // check if string provided is a valid JSON
+                        var configuration = JSON.parse(e.target.result);
+                    } catch (e) {
+                        // data provided != valid json object
+                        console.log('Data provided != valid JSON string, restore aborted.');
+
+                        return;
+                    }
+
+                    // validate
+                    if (typeof configuration.generatedBy !== 'undefined' && compareVersions(configuration.generatedBy, CONFIGURATOR.backupFileMinVersionAccepted)) {
+                                                
+                        if (!migrate(configuration)) {
+                            GUI.log(chrome.i18n.getMessage('backupFileUnmigratable'));
+                            return;
+                        }
+                        
+                        configuration_upload(configuration, callback);
+                        
+                    } else {
+                        GUI.log(chrome.i18n.getMessage('backupFileIncompatible'));
+                    }
+
+                    
+                }
             };
 
             reader.readAsText(file);
         });
     });
-}
 
-function configuration_upload() {
-    // this "cloned" function contains all the upload sequences for the respective array/objects
-    // that are currently scattered in separate tabs (ergo - pid_tuning.js/initial_setup.js/etc)
-    // for current purposes, this approach works, but its not really "valid" and this approach
-    // should be reworked in the future, so the same code won't be cloned over !!!
-
-    // PID section
-    var PID_buffer_out = new Array();
-    var PID_buffer_needle = 0;
-    for (var i = 0; i < PIDs.length; i++) {
-        switch (i) {
-            case 0: 
-            case 1: 
-            case 2: 
-            case 3: 
-            case 7: 
-            case 8:
-            case 9:
-                PID_buffer_out[PID_buffer_needle]     = parseInt(PIDs[i][0] * 10);
-                PID_buffer_out[PID_buffer_needle + 1] = parseInt(PIDs[i][1] * 1000);
-                PID_buffer_out[PID_buffer_needle + 2] = parseInt(PIDs[i][2]);
-                break;
-            case 4:
-                PID_buffer_out[PID_buffer_needle]     = parseInt(PIDs[i][0] * 100);
-                PID_buffer_out[PID_buffer_needle + 1] = parseInt(PIDs[i][1] * 100);
-                PID_buffer_out[PID_buffer_needle + 2] = parseInt(PIDs[i][2]);
-                break;
-            case 5: 
-            case 6:
-                PID_buffer_out[PID_buffer_needle]     = parseInt(PIDs[i][0] * 10);
-                PID_buffer_out[PID_buffer_needle + 1] = parseInt(PIDs[i][1] * 100);
-                PID_buffer_out[PID_buffer_needle + 2] = parseInt(PIDs[i][2] * 1000);
-                break;                     
+    function compareVersions(generated, required) {
+        if (generated == undefined) {
+            return false;
         }
-        PID_buffer_needle += 3;
+        return semver.gte(generated, required);
+    }
+
+    function migrate(configuration) {
+        var appliedMigrationsCount = 0;
+        var migratedVersion = configuration.generatedBy;
+        GUI.log(chrome.i18n.getMessage('configMigrationFrom', [migratedVersion]));
+        
+        if (!compareVersions(migratedVersion, '0.59.1')) {
+            
+            // variable was renamed
+            configuration.MISC.rssi_channel = configuration.MISC.rssi_aux_channel;
+            configuration.MISC.rssi_aux_channel = undefined;
+            
+            migratedVersion = '0.59.1';
+            GUI.log(chrome.i18n.getMessage('configMigratedTo', [migratedVersion]));
+            appliedMigrationsCount++;
+        }
+        
+        if (!compareVersions(migratedVersion, '0.60.1')) {
+            
+            // LED_STRIP support was added.
+            if (!configuration.LED_STRIP) {
+                configuration.LED_STRIP = [];
+            }
+            
+            migratedVersion = '0.60.1';
+            GUI.log(chrome.i18n.getMessage('configMigratedTo', [migratedVersion]));
+            appliedMigrationsCount++;
+        }
+        
+        if (!compareVersions(migratedVersion, '0.61.0')) {
+            
+            // Changing PID controller via UI was added.
+            if (!configuration.PIDs && configuration.PID) {
+                configuration.PIDs = configuration.PID;
+                configuration.PID = {
+                    controller: 0 // assume pid controller 0 was used.
+                };
+            }
+            
+            migratedVersion = '0.61.0';
+            GUI.log(chrome.i18n.getMessage('configMigratedTo', [migratedVersion]));
+            appliedMigrationsCount++;
+        }
+
+        if (!compareVersions(migratedVersion, '0.63.0')) {
+            
+            // LED Strip was saved as object instead of array.
+            if (typeof(configuration.LED_STRIP) == 'object') {
+                var fixed_led_strip = [];
+
+                var index = 0;
+                while (configuration.LED_STRIP[index]) {
+                    fixed_led_strip.push(configuration.LED_STRIP[index++]);
+                }
+                configuration.LED_STRIP = fixed_led_strip;
+            }
+
+            
+            for (var profileIndex = 0; profileIndex < 3; profileIndex++) {
+                var RC = configuration.profiles[profileIndex].RC;
+                // TPA breakpoint was added
+                if (!RC.dynamic_THR_breakpoint) {
+                    RC.dynamic_THR_breakpoint = 1500; // firmware default
+                }
+                
+                // Roll and pitch rates were split
+                RC.roll_rate = RC.roll_pitch_rate;
+                RC.pitch_rate = RC.roll_pitch_rate;
+            }
+            
+            migratedVersion = '0.63.0';
+            GUI.log(chrome.i18n.getMessage('configMigratedTo', [migratedVersion]));
+            appliedMigrationsCount++;
+        }
+
+        if (configuration.apiVersion == undefined) {
+            configuration.apiVersion = "1.0.0" // a guess that will satisfy the rest of the code
+        }
+        // apiVersion previously stored without patchlevel
+        if (!semver.parse(configuration.apiVersion)) {
+            configuration.apiVersion += ".0";
+            if (!semver.parse(configuration.apiVersion)) {
+                return false;
+            }
+        }
+        if (compareVersions(migratedVersion, '0.63.0') && !compareVersions(configuration.apiVersion, '1.7.0')) {
+            // Serial configuation redesigned, 0.63.0 saves old and new configurations.
+            var ports = [];
+            for (var portIndex = 0; portIndex < configuration.SERIAL_CONFIG.ports.length; portIndex++) {
+                var oldPort = configuration.SERIAL_CONFIG.ports[portIndex];
+
+                var newPort = {
+                    identifier: oldPort.identifier,
+                    functions: [],
+                    msp_baudrate: String(configuration.SERIAL_CONFIG.mspBaudRate),
+                    gps_baudrate: String(configuration.SERIAL_CONFIG.gpsBaudRate),
+                    telemetry_baudrate: 'AUTO',
+                    blackbox_baudrate: '115200',
+                };
+                
+                switch(oldPort.scenario) {
+                    case 1: // MSP, CLI, TELEMETRY, SMARTPORT TELEMETRY, GPS-PASSTHROUGH
+                    case 5: // MSP, CLI, GPS-PASSTHROUGH
+                    case 8: // MSP ONLY
+                        newPort.functions.push('MSP');
+                    break;
+                    case 2: // GPS 
+                        newPort.functions.push('GPS');
+                    break;
+                    case 3: // RX_SERIAL 
+                        newPort.functions.push('RX_SERIAL');
+                    break;
+                    case 10: // BLACKBOX ONLY
+                        newPort.functions.push('BLACKBOX');
+                    break;
+                    case 11: // MSP, CLI, BLACKBOX, GPS-PASSTHROUGH
+                        newPort.functions.push('MSP');
+                        newPort.functions.push('BLACKBOX');
+                    break;
+                }
+                
+                ports.push(newPort);
+            }
+            configuration.SERIAL_CONFIG = { 
+                ports: ports 
+            };
+            
+            appliedMigrationsCount++;
+        }
+        
+        if (compareVersions(migratedVersion, '0.63.0') && !compareVersions(configuration.apiVersion, '1.8.0')) {
+            // api 1.8 exposes looptime and arming config
+            
+            if (configuration.FC_CONFIG == undefined) {
+                configuration.FC_CONFIG = {
+                    loopTime: 3500
+                };
+            }
+
+            if (configuration.ARMING_CONFIG == undefined) {
+                configuration.ARMING_CONFIG = {
+                    auto_disarm_delay:      5,
+                    disarm_kill_switch:     1
+                };
+            }
+            appliedMigrationsCount++;
+        }
+        
+        if (compareVersions(migratedVersion, '0.63.0')) {
+            // backups created with 0.63.0 for firmwares with api < 1.8 were saved with incorrect looptime
+            if (configuration.FC_CONFIG.loopTime == 0) {
+                //reset it to the default
+                configuration.FC_CONFIG.loopTime = 3500;
+            }
+        }
+        
+        if (semver.lt(migratedVersion, '0.66.0')) {
+            // api 1.12 updated servo configuration protocol and added servo mixer rules
+            for (var profileIndex = 0; i < configuration.profiles.length; i++) {
+                
+                if (semver.eq(configuration.apiVersion, '1.10.0')) {
+                    // drop two unused servo configurations
+                    while (configuration.profiles[profileIndex].ServoConfig.length > 8) {
+                        configuration.profiles[profileIndex].ServoConfig.pop();
+                    } 
+                }
+                
+                for (var i = 0; i < configuration.profiles[profileIndex].ServoConfig.length; i++) {
+                    var servoConfig = profiles[profileIndex].ServoConfig;
+                    
+                    servoConfig[i].angleAtMin = 90;
+                    servoConfig[i].angleAtMax = 90;
+                    servoConfig[i].reversedInputSources = 0;
+                    
+                    // set the rate to 0 if an invalid value is detected.
+                    if (servoConfig[i].rate < -100 || servoConfig[i].rate > 100) {
+                        servoConfig[i].rate = 0;
+                    }
+                }
+
+                configuration.profiles[profileIndex].ServoRules = [];
+            }
+            
+            migratedVersion = '0.66.0';
+
+            appliedMigrationsCount++;
+        }
+        
+        if (appliedMigrationsCount > 0) {
+            GUI.log(chrome.i18n.getMessage('configMigrationSuccessful', [appliedMigrationsCount]));
+        }
+                
+        return true;
     }
     
-    // Send over the PID changes
-    send_message(MSP_codes.MSP_SET_PID, PID_buffer_out); 
+    function configuration_upload(configuration, callback) {
+        function upload() {
+            var activeProfile = null,
+                profilesN = 3;
 
-    
-    // RC Tuning section
-    var RC_tuning_buffer_out = new Array();
-    RC_tuning_buffer_out[0] = parseInt(RC_tuning.RC_RATE * 100);
-    RC_tuning_buffer_out[1] = parseInt(RC_tuning.RC_EXPO * 100);
-    RC_tuning_buffer_out[2] = parseInt(RC_tuning.roll_pitch_rate * 100);
-    RC_tuning_buffer_out[3] = parseInt(RC_tuning.yaw_rate * 100);
-    RC_tuning_buffer_out[4] = parseInt(RC_tuning.dynamic_THR_PID * 100);
-    RC_tuning_buffer_out[5] = parseInt(RC_tuning.throttle_MID * 100);
-    RC_tuning_buffer_out[6] = parseInt(RC_tuning.throttle_EXPO * 100);
-    
-    // Send over the RC_tuning changes
-    send_message(MSP_codes.MSP_SET_RC_TUNING, RC_tuning_buffer_out);
+            var profileSpecificData = [
+                MSP_codes.MSP_SET_PID_CONTROLLER,
+                MSP_codes.MSP_SET_PID,
+                MSP_codes.MSP_SET_RC_TUNING,
+                MSP_codes.MSP_SET_ACC_TRIM
+            ];
 
-    
-    // AUX section
-    var AUX_val_buffer_out = new Array();
-    
-    var needle = 0;
-    for (var i = 0; i < AUX_CONFIG_values.length; i++) {
-        AUX_val_buffer_out[needle++] = lowByte(AUX_CONFIG_values[i]);
-        AUX_val_buffer_out[needle++] = highByte(AUX_CONFIG_values[i]);
+            MSP.send_message(MSP_codes.MSP_STATUS, false, false, function () {
+                activeProfile = CONFIG.profile;
+                select_profile();
+            });
+
+            function select_profile() {
+                if (activeProfile > 0) {
+                    MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [0], false, upload_specific_data);
+                } else {
+                    upload_specific_data();
+                }
+            }
+
+            function upload_specific_data() {
+                var savingProfile = 0,
+                    codeKey = 0;
+
+                function load_objects(profile) {
+                    PID = configuration.profiles[profile].PID;
+                    PIDs = configuration.profiles[profile].PIDs;
+                    RC_tuning = configuration.profiles[profile].RC;
+                    CONFIG.accelerometerTrims = configuration.profiles[profile].AccTrim;
+                    SERVO_CONFIG = configuration.profiles[profile].ServoConfig;
+                    SERVO_RULES = configuration.profiles[profile].ServoRules;
+                    MODE_RANGES = configuration.profiles[profile].ModeRanges;
+                    ADJUSTMENT_RANGES = configuration.profiles[profile].AdjustmentRanges;
+                }
+
+                function upload_using_specific_commands() {
+                    MSP.send_message(profileSpecificData[codeKey], MSP.crunch(profileSpecificData[codeKey]), false, function () {
+                        codeKey++;
+
+                        if (codeKey < profileSpecificData.length) {
+                            upload_using_specific_commands();
+                        } else {
+                            codeKey = 0;
+                            savingProfile++;
+
+                            if (savingProfile < profilesN) {
+                                load_objects(savingProfile);
+
+                                MSP.send_message(MSP_codes.MSP_EEPROM_WRITE, false, false, function () {
+                                    MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [savingProfile], false, upload_using_specific_commands);
+                                });
+                            } else {
+                                MSP.send_message(MSP_codes.MSP_EEPROM_WRITE, false, false, function () {
+                                    MSP.send_message(MSP_codes.MSP_SELECT_SETTING, [activeProfile], false, upload_unique_data);
+                                });
+                            }
+                        }
+                    });
+                }
+
+                function upload_servo_mix_rules() {
+                    MSP.sendServoMixRules(upload_servo_configuration);
+                }
+
+                function upload_servo_configuration() {
+                    MSP.sendServoConfigurations(upload_mode_ranges);
+                }
+
+                function upload_mode_ranges() {
+                    MSP.sendModeRanges(upload_adjustment_ranges);
+                }
+                
+                function upload_adjustment_ranges() {
+                    MSP.sendAdjustmentRanges(upload_using_specific_commands);
+                }
+                // start uploading
+                load_objects(0);
+                upload_servo_configuration();
+            }
+
+            function upload_unique_data() {
+                var codeKey = 0;
+
+                var uniqueData = [
+                    MSP_codes.MSP_SET_MISC,
+                    MSP_codes.MSP_SET_RX_MAP,
+                    MSP_codes.MSP_SET_BF_CONFIG,
+                    MSP_codes.MSP_SET_CF_SERIAL_CONFIG
+                ];
+                
+                function update_unique_data_list() {
+                    if (semver.gte(CONFIG.apiVersion, "1.8.0")) {
+                        uniqueData.push(MSP_codes.MSP_SET_LOOP_TIME);
+                        uniqueData.push(MSP_codes.MSP_SET_ARMING_CONFIG);
+                    }
+                }
+                
+                function load_objects() {
+                    MISC = configuration.MISC;
+                    RC_MAP = configuration.RCMAP;
+                    BF_CONFIG = configuration.BF_CONFIG;
+                    SERIAL_CONFIG = configuration.SERIAL_CONFIG;
+                    LED_STRIP = configuration.LED_STRIP;
+                    ARMING_CONFIG = configuration.ARMING_CONFIG;
+                    FC_CONFIG = configuration.FC_CONFIG;
+                }
+
+                function send_unique_data_item() {
+                    if (codeKey < uniqueData.length) {
+                        MSP.send_message(uniqueData[codeKey], MSP.crunch(uniqueData[codeKey]), false, function () {
+                            codeKey++;
+                            send_unique_data_item();
+                        });
+                    } else {
+                        MSP.send_message(MSP_codes.MSP_EEPROM_WRITE, false, false, send_led_strip_config);
+                    }
+                }
+
+                load_objects();
+
+                update_unique_data_list();
+
+                // start uploading
+                send_unique_data_item();
+            }
+
+            function send_led_strip_config() {
+                MSP.sendLedStripConfig(reboot);
+            }
+            
+            function reboot() {
+                GUI.log(chrome.i18n.getMessage('eeprom_saved_ok'));
+
+                GUI.tab_switch_cleanup(function() {
+                    MSP.send_message(MSP_codes.MSP_SET_REBOOT, false, false, reinitialize);
+                });
+            }
+
+            function reinitialize() {
+                GUI.log(chrome.i18n.getMessage('deviceRebooting'));
+
+                GUI.timeout_add('waiting_for_bootup', function waiting_for_bootup() {
+                    MSP.send_message(MSP_codes.MSP_IDENT, false, false, function () {
+                        GUI.log(chrome.i18n.getMessage('deviceReady'));
+
+                        if (callback) callback();
+                    });
+                }, 1500); // 1500 ms seems to be just the right amount of delay to prevent data request timeouts
+            }
+        }
+
+        upload();
     }
-    
-    // Send over the AUX changes
-    send_message(MSP_codes.MSP_SET_BOX, AUX_val_buffer_out);     
- 
- 
-    // Trim section (baseflight specific)
-    var buffer_out = new Array();
-    buffer_out[0] = lowByte(CONFIG.accelerometerTrims[0]);
-    buffer_out[1] = highByte(CONFIG.accelerometerTrims[0]);
-    buffer_out[2] = lowByte(CONFIG.accelerometerTrims[1]);
-    buffer_out[3] = highByte(CONFIG.accelerometerTrims[1]); 
-
-    // Send over the new trims
-    send_message(MSP_codes.MSP_SET_ACC_TRIM, buffer_out);    
-    
-    
-    // Save changes to EEPROM
-    send_message(MSP_codes.MSP_EEPROM_WRITE, MSP_codes.MSP_EEPROM_WRITE);   
-    
 }

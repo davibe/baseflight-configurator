@@ -1,12 +1,15 @@
 <div class="tab-cli">
-    <p>
-        <span style="color: red;">Note</span>: Leaving CLI tab or pressing Disconnect will <strong>automatically</strong> 
-        send "<strong>exit</strong>" to the board, which will make the controller save all the changes and <span style="color: red">restart</span>.
-    </p>
-    <div class="window">
-        <div class="wrapper">
+    <div class="content_wrapper">
+        <div class="note">
+            <div class="note_spacer">
+                <p i18n="cliInfo"></p>
+            </div>
         </div>
+        <div class="backdrop">
+            <div class="window">
+                <div class="wrapper"></div>
+            </div>
+        </div>
+        <textarea name="commands" i18n_placeholder="cliInputPlaceholder" rows="1" cols="0"></textarea>
     </div>
-    <textarea name="commands" placeholder="Write your command here" rows="0" cols="0"></textarea>
-    <a class="copy" href="#">Copy to Clipboard</a>
 </div>

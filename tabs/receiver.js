@@ -1,204 +1,469 @@
-var samples_i;
-function tab_initialize_receiver() {
-    ga_tracker.sendAppView('Receiver Page');
-    
-    // fill in data from RC_tuning
-    $('.tunings .throttle input[name="mid"]').val(RC_tuning.throttle_MID.toFixed(2));
-    $('.tunings .throttle input[name="expo"]').val(RC_tuning.throttle_EXPO.toFixed(2));
+'use strict';
 
-    $('.tunings .rate input[name="rate"]').val(RC_tuning.RC_RATE.toFixed(2));
-    $('.tunings .rate input[name="expo"]').val(RC_tuning.RC_EXPO.toFixed(2));
-    
-    // Setup plot variables and plot it self
-    samples_i = 300;
-    
-    RX_plot_data = new Array(8);
-    for (var i = 0; i < 8; i++) {
-        RX_plot_data[i] = new Array();
-    }    
+TABS.receiver = {
+  rateChartHeight: 117
+};
 
-    for (var i = 0; i <= 300; i++) {
-        RX_plot_data[0].push([i, 0]);
-        RX_plot_data[1].push([i, 0]);
-        RX_plot_data[2].push([i, 0]);
-        RX_plot_data[3].push([i, 0]);
-        RX_plot_data[4].push([i, 0]); 
-        RX_plot_data[5].push([i, 0]); 
-        RX_plot_data[6].push([i, 0]); 
-        RX_plot_data[7].push([i, 0]); 
+TABS.receiver.initialize = function (callback) {
+    var self = this;
+
+    if (GUI.active_tab != 'receiver') {
+        GUI.active_tab = 'receiver';
+        googleAnalytics.sendAppView('Receiver');
     }
-    
-    e_RX_plot = document.getElementById("RX_plot");
-    
-    RX_plot_options = {
-        title: "Channel width (us)",
-        shadowSize: 0,
-        yaxis : {
-            max: 2200,
-            min: 800,
-            noTicks: 10
-        },
-        xaxis : {
-            //noTicks = 0
-        },
-        grid : {
-            backgroundColor: "#FFFFFF"
-        },
-        legend : {
-            position: "we",
-            backgroundOpacity: 0
-        }        
-    }; 
-    
-    // UI Hooks
-    $('.tunings input').change(function() {
-        // if any of the fields changed, unlock update button
-        $('a.update').addClass('active');
-    });
-    
-    // curves    
-    $('.tunings .throttle input').change(function() {
-        var mid = parseFloat($('.tunings .throttle input[name="mid"]').val());
-        var expo = parseFloat($('.tunings .throttle input[name="expo"]').val());
-        
-        var throttle_curve = document.getElementById("throttle_curve_c");
-        var context = throttle_curve.getContext("2d");
-        context.clearRect(0, 0, 220, 58);
-        
-        // math magic by englishman
-        var midx = 220 * mid;
-        var midxl = midx * .5;
-        var midxr = (((220 - midx) * .5) + midx);
-        var midy = 58 - (midx * (58 / 220));
-        var midyl = 58 - ((58 - midy) * .5 *(expo + 1));
-        var midyr = (midy / 2) * (expo + 1);        
-        
-        context.beginPath();
-        context.moveTo(0, 58);
-        context.quadraticCurveTo(midxl, midyl, midx, midy);
-        context.moveTo(midx, midy);
-        context.quadraticCurveTo(midxr, midyr, 220, 0);     
-        
-        context.lineWidth = 2;
-        context.stroke();
-    });
-    $('.tunings .throttle input').trigger('change'); // initial software trigger
-    
-    $('.tunings .rate input').change(function() {
-        var rate = parseFloat($('.tunings .rate input[name="rate"]').val());
-        var expo = parseFloat($('.tunings .rate input[name="expo"]').val());  
-        
-        var pitch_roll_curve = document.getElementById("pitch_roll_curve_c");
-        var context = pitch_roll_curve.getContext("2d");
-        context.clearRect(0, 0, 220, 58);
-        
-        // math magic by englishman
-        var ratey = 58 * rate;
-        
-        context.beginPath();
-        context.moveTo(0, 58);
-        context.quadraticCurveTo(110, 58 - ((ratey / 2) * (1 - expo)), 220, 58 - ratey);
-        context.lineWidth = 2;
-        context.stroke();
-    });
-    $('.tunings .rate input').trigger('change'); // initial software trigger
-    
-    $('a.update').click(function() {
-        if ($(this).hasClass('active')) {
+
+    function get_misc_data() {
+        MSP.send_message(MSP_codes.MSP_MISC, false, false, get_rc_data);
+    }
+
+    function get_rc_data() {
+        MSP.send_message(MSP_codes.MSP_RC, false, false, get_rc_map);
+    }
+
+    function get_rc_map() {
+        MSP.send_message(MSP_codes.MSP_RX_MAP, false, false, load_config);
+    }
+
+    // Fetch features so we can check if RX_MSP is enabled:
+    function load_config() {
+        MSP.send_message(MSP_codes.MSP_BF_CONFIG, false, false, load_html);
+    }
+
+    function load_html() {
+        $('#content').load("./tabs/receiver.html", process_html);
+    }
+
+    MSP.send_message(MSP_codes.MSP_RC_TUNING, false, false, get_misc_data);
+
+    function process_html() {
+        // translate to user-selected language
+        localize();
+
+        // fill in data from RC_tuning
+        $('.tunings .throttle input[name="mid"]').val(RC_tuning.throttle_MID.toFixed(2));
+        $('.tunings .throttle input[name="expo"]').val(RC_tuning.throttle_EXPO.toFixed(2));
+
+        $('.tunings .rate input[name="rate"]').val(RC_tuning.RC_RATE.toFixed(2));
+        $('.tunings .rate input[name="expo"]').val(RC_tuning.RC_EXPO.toFixed(2));
+		    $('.tunings .yaw_rate input[name="yaw_expo"]').val(RC_tuning.RC_YAW_EXPO.toFixed(2));
+
+		    if (semver.lt(CONFIG.apiVersion, "1.10.0")) {
+            $('.tunings .yaw_rate input[name="yaw_expo"]').hide();
+        }
+
+        chrome.storage.local.get('rx_refresh_rate', function (result) {
+            if (result.rx_refresh_rate) {
+                $('select[name="rx_refresh_rate"]').val(result.rx_refresh_rate).change();
+            } else {
+                $('select[name="rx_refresh_rate"]').change(); // start with default value
+            }
+        });
+
+        // generate bars
+        var bar_names = [
+                chrome.i18n.getMessage('controlAxisRoll'),
+                chrome.i18n.getMessage('controlAxisPitch'),
+                chrome.i18n.getMessage('controlAxisYaw'),
+                chrome.i18n.getMessage('controlAxisThrottle')
+            ],
+            bar_container = $('.tab-receiver .bars'),
+            aux_index = 1;
+
+        for (var i = 0; i < RC.active_channels; i++) {
+            var name;
+            if (i < bar_names.length) {
+                name = bar_names[i];
+            } else {
+                name = chrome.i18n.getMessage("controlAxisAux" + (aux_index++));
+            }
+
+            bar_container.append('\
+                <ul>\
+                    <li class="name">' + name + '</li>\
+                    <li class="meter">\
+                        <div class="meter-bar">\
+                            <div class="label"></div>\
+                            <div class="fill">\
+                                <div class="label"></div>\
+                            </div>\
+                        </div>\
+                    </li>\
+                </ul>\
+            ');
+        }
+
+        // we could probably use min and max throttle for the range, will see
+        var meter_scale = {
+            'min': 800,
+            'max': 2200
+        };
+
+        var meter_fill_array = [];
+        $('.meter .fill', bar_container).each(function () {
+            meter_fill_array.push($(this));
+        });
+
+        var meter_label_array = [];
+        $('.meter', bar_container).each(function () {
+            meter_label_array.push($('.label' , this));
+        });
+
+        // correct inner label margin on window resize (i don't know how we could do this in css)
+        self.resize = function () {
+            var containerWidth = $('.meter:first', bar_container).width(),
+                labelWidth = $('.meter .label:first', bar_container).width(),
+                margin = (containerWidth / 2) - (labelWidth / 2);
+
+            for (var i = 0; i < meter_label_array.length; i++) {
+                meter_label_array[i].css('margin-left', margin);
+            }
+        };
+
+        $(window).on('resize', self.resize).resize(); // trigger so labels get correctly aligned on creation
+
+        // handle rcmap & rssi aux channel
+        var RC_MAP_Letters = ['A', 'E', 'R', 'T', '1', '2', '3', '4'];
+
+        var strBuffer = [];
+        for (var i = 0; i < RC_MAP.length; i++) {
+            strBuffer[RC_MAP[i]] = RC_MAP_Letters[i];
+        }
+
+        // reconstruct
+        var str = strBuffer.join('');
+
+        // set current value
+        $('input[name="rcmap"]').val(str);
+
+        // validation / filter
+        var last_valid = str;
+
+        $('input[name="rcmap"]').on('input', function () {
+            var val = $(this).val();
+
+            // limit length to max 8
+            if (val.length > 8) {
+                val = val.substr(0, 8);
+                $(this).val(val);
+            }
+        });
+
+        $('input[name="rcmap"]').focusout(function () {
+            var val = $(this).val(),
+                strBuffer = val.split(''),
+                duplicityBuffer = [];
+
+            if (val.length != 8) {
+                $(this).val(last_valid);
+                return false;
+            }
+
+            // check if characters inside are all valid, also check for duplicity
+            for (var i = 0; i < val.length; i++) {
+                if (RC_MAP_Letters.indexOf(strBuffer[i]) < 0) {
+                    $(this).val(last_valid);
+                    return false;
+                }
+
+                if (duplicityBuffer.indexOf(strBuffer[i]) < 0) {
+                    duplicityBuffer.push(strBuffer[i]);
+                } else {
+                    $(this).val(last_valid);
+                    return false;
+                }
+            }
+        });
+
+        // handle helper
+        $('select[name="rcmap_helper"]').val(0); // go out of bounds
+        $('select[name="rcmap_helper"]').change(function () {
+            $('input[name="rcmap"]').val($(this).val());
+        });
+
+        // rssi
+        var rssi_channel_e = $('select[name="rssi_channel"]');
+        rssi_channel_e.append('<option value="0">Disabled</option>');
+        for (var i = 0; i < RC.active_channels; i++) {
+            rssi_channel_e.append('<option value="' + i + '">' + i + '</option>');
+        }
+
+        $('select[name="rssi_channel"]').val(MISC.rssi_channel);
+
+        var rateHeight = TABS.receiver.rateChartHeight;
+
+        // UI Hooks
+        // curves
+        $('.tunings .throttle input').on('input change', function () {
+            setTimeout(function () { // let global validation trigger and adjust the values first
+                var throttleMidE = $('.tunings .throttle input[name="mid"]'),
+                    throttleExpoE = $('.tunings .throttle input[name="expo"]'),
+                    mid = parseFloat(throttleMidE.val()),
+                    expo = parseFloat(throttleExpoE.val()),
+                    throttle_curve = $('.throttle_curve canvas').get(0),
+                    context = throttle_curve.getContext("2d");
+
+                // local validation to deal with input event
+                if (mid >= parseFloat(throttleMidE.prop('min')) &&
+                    mid <= parseFloat(throttleMidE.prop('max')) &&
+                    expo >= parseFloat(throttleExpoE.prop('min')) &&
+                    expo <= parseFloat(throttleExpoE.prop('max'))) {
+                    // continue
+                } else {
+                    return;
+                }
+
+                // math magic by englishman
+                var midx = 200 * mid,
+                    midxl = midx * 0.5,
+                    midxr = (((200 - midx) * 0.5) + midx),
+                    midy = rateHeight - (midx * (rateHeight / 200)),
+                    midyl = rateHeight - ((rateHeight - midy) * 0.5 *(expo + 1)),
+                    midyr = (midy / 2) * (expo + 1);
+
+                // draw
+                context.clearRect(0, 0, 200, rateHeight);
+                context.beginPath();
+                context.moveTo(0, rateHeight);
+                context.quadraticCurveTo(midxl, midyl, midx, midy);
+                context.moveTo(midx, midy);
+                context.quadraticCurveTo(midxr, midyr, 200, 0);
+                context.lineWidth = 2;
+				context.strokeStyle = '#59aa29';
+                context.stroke();
+            }, 0);
+        }).trigger('input');
+
+        $('.tunings .rate input').on('input change', function () {
+            setTimeout(function () { // let global validation trigger and adjust the values first
+                var rateE = $('.tunings .rate input[name="rate"]'),
+                    expoE = $('.tunings .rate input[name="expo"]'),
+                    rate = parseFloat(rateE.val()),
+                    expo = parseFloat(expoE.val()),
+                    pitch_roll_curve = $('.pitch_roll_curve canvas').get(0),
+                    context = pitch_roll_curve.getContext("2d");
+
+                // local validation to deal with input event
+                if (rate >= parseFloat(rateE.prop('min')) &&
+                    rate <= parseFloat(rateE.prop('max')) &&
+                    expo >= parseFloat(expoE.prop('min')) &&
+                    expo <= parseFloat(expoE.prop('max'))) {
+                    // continue
+                } else {
+                    return;
+                }
+
+                // math magic by englishman
+                var ratey = rateHeight * rate;
+
+                // draw
+                context.clearRect(0, 0, 200, rateHeight);
+                context.beginPath();
+                context.moveTo(0, rateHeight);
+                context.quadraticCurveTo(110, rateHeight - ((ratey / 2) * (1 - expo)), 200, rateHeight - ratey);
+                context.lineWidth = 2;
+				context.strokeStyle = '#59aa29';
+                context.stroke();
+            }, 0);
+        }).trigger('input');
+
+        $('a.refresh').click(function () {
+            MSP.send_message(MSP_codes.MSP_RC_TUNING, false, false, function () {
+                GUI.log(chrome.i18n.getMessage('receiverDataRefreshed'));
+
+                // fill in data from RC_tuning
+                $('.tunings .throttle input[name="mid"]').val(RC_tuning.throttle_MID.toFixed(2));
+                $('.tunings .throttle input[name="expo"]').val(RC_tuning.throttle_EXPO.toFixed(2));
+
+                $('.tunings .rate input[name="rate"]').val(RC_tuning.RC_RATE.toFixed(2));
+                $('.tunings .rate input[name="expo"]').val(RC_tuning.RC_EXPO.toFixed(2));
+
+                // update visual representation
+                $('.tunings .throttle input').change();
+                $('.tunings .rate input').change();
+            });
+        });
+
+        $('a.update').click(function () {
             // catch RC_tuning changes
             RC_tuning.throttle_MID = parseFloat($('.tunings .throttle input[name="mid"]').val());
             RC_tuning.throttle_EXPO = parseFloat($('.tunings .throttle input[name="expo"]').val());
-            
+
             RC_tuning.RC_RATE = parseFloat($('.tunings .rate input[name="rate"]').val());
-            RC_tuning.RC_EXPO = parseFloat($('.tunings .rate input[name="expo"]').val());              
-            
-            var RC_tuning_buffer_out = new Array();
-            RC_tuning_buffer_out[0] = parseInt(RC_tuning.RC_RATE * 100);
-            RC_tuning_buffer_out[1] = parseInt(RC_tuning.RC_EXPO * 100);
-            RC_tuning_buffer_out[2] = parseInt(RC_tuning.roll_pitch_rate * 100);
-            RC_tuning_buffer_out[3] = parseInt(RC_tuning.yaw_rate * 100);
-            RC_tuning_buffer_out[4] = parseInt(RC_tuning.dynamic_THR_PID * 100);
-            RC_tuning_buffer_out[5] = parseInt(RC_tuning.throttle_MID * 100);
-            RC_tuning_buffer_out[6] = parseInt(RC_tuning.throttle_EXPO * 100);
-            
-            // Send over the RC_tuning changes
-            send_message(MSP_codes.MSP_SET_RC_TUNING, RC_tuning_buffer_out);        
+            RC_tuning.RC_EXPO = parseFloat($('.tunings .rate input[name="expo"]').val());
+			RC_tuning.RC_YAW_EXPO = parseFloat($('.tunings .yaw_rate input[name="yaw_expo"]').val());
 
-            // Save changes to EEPROM
-            send_message(MSP_codes.MSP_EEPROM_WRITE, MSP_codes.MSP_EEPROM_WRITE);
-            
-            // remove the active status
-            $(this).removeClass('active');        
-        }
-    });
-    
-    // enable RC data pulling
-    timers.push(setInterval(receiverPoll, 50));    
-}
+            // catch rc map
+            var RC_MAP_Letters = ['A', 'E', 'R', 'T', '1', '2', '3', '4'];
+            var strBuffer = $('input[name="rcmap"]').val().split('');
 
-function receiverPoll() {    
-    // Update UI with latest data
-    $('.tab-receiver meter:eq(0)').val(RC.throttle);
-    $('.tab-receiver .value:eq(0)').html(RC.throttle);
-    
-    $('.tab-receiver meter:eq(1)').val(RC.pitch);
-    $('.tab-receiver .value:eq(1)').html(RC.pitch);
-    
-    $('.tab-receiver meter:eq(2)').val(RC.roll);
-    $('.tab-receiver .value:eq(2)').html(RC.roll);
-    
-    $('.tab-receiver meter:eq(3)').val(RC.yaw);
-    $('.tab-receiver .value:eq(3)').html(RC.yaw);
-    
-    
-    $('.tab-receiver meter:eq(4)').val(RC.AUX1);
-    $('.tab-receiver .value:eq(4)').html(RC.AUX1);
-    
-    $('.tab-receiver meter:eq(5)').val(RC.AUX2);
-    $('.tab-receiver .value:eq(5)').html(RC.AUX2);
-    
-    $('.tab-receiver meter:eq(6)').val(RC.AUX3);
-    $('.tab-receiver .value:eq(6)').html(RC.AUX3);
-    
-    $('.tab-receiver meter:eq(7)').val(RC.AUX4);
-    $('.tab-receiver .value:eq(7)').html(RC.AUX4);
-    
-    // push latest data to the main array
-    RX_plot_data[0].push([samples_i, RC.throttle]);
-    RX_plot_data[1].push([samples_i, RC.pitch]);
-    RX_plot_data[2].push([samples_i, RC.roll]);
-    RX_plot_data[3].push([samples_i, RC.yaw]);
-    RX_plot_data[4].push([samples_i, RC.AUX1]);
-    RX_plot_data[5].push([samples_i, RC.AUX2]);
-    RX_plot_data[6].push([samples_i, RC.AUX3]);
-    RX_plot_data[7].push([samples_i, RC.AUX4]);        
+            for (var i = 0; i < RC_MAP.length; i++) {
+                RC_MAP[i] = strBuffer.indexOf(RC_MAP_Letters[i]);
+            }
 
-    // Remove old data from array
-    while (RX_plot_data[0].length > 300) {
-        RX_plot_data[0].shift();
-        RX_plot_data[1].shift();
-        RX_plot_data[2].shift(); 
-        RX_plot_data[3].shift(); 
-        RX_plot_data[4].shift(); 
-        RX_plot_data[5].shift(); 
-        RX_plot_data[6].shift(); 
-        RX_plot_data[7].shift();                     
-    }; 
-    
-    // redraw plot
-    Flotr.draw(e_RX_plot, [ 
-        {data: RX_plot_data[0], label: "THROTTLE"}, 
-        {data: RX_plot_data[1], label: "PITCH"},
-        {data: RX_plot_data[2], label: "ROLL"},
-        {data: RX_plot_data[3], label: "YAW"},
-        {data: RX_plot_data[4], label: "AUX1"},
-        {data: RX_plot_data[5], label: "AUX2"},
-        {data: RX_plot_data[6], label: "AUX3"},
-        {data: RX_plot_data[7], label: "AUX4"} ], RX_plot_options);   
-        
-    samples_i++;
-    
-    // Request new data
-    send_message(MSP_codes.MSP_STATUS, MSP_codes.MSP_STATUS);
-    send_message(MSP_codes.MSP_RC, MSP_codes.MSP_RC);
-}
+            // catch rssi aux
+            MISC.rssi_channel = parseInt($('select[name="rssi_channel"]').val());
+
+            function save_rc_map() {
+                MSP.send_message(MSP_codes.MSP_SET_RX_MAP, MSP.crunch(MSP_codes.MSP_SET_RX_MAP), false, save_misc);
+            }
+
+            function save_misc() {
+                MSP.send_message(MSP_codes.MSP_SET_MISC, MSP.crunch(MSP_codes.MSP_SET_MISC), false, save_to_eeprom);
+            }
+
+            function save_to_eeprom() {
+                MSP.send_message(MSP_codes.MSP_EEPROM_WRITE, false, false, function () {
+                    GUI.log(chrome.i18n.getMessage('receiverEepromSaved'));
+                });
+            }
+
+            MSP.send_message(MSP_codes.MSP_SET_RC_TUNING, MSP.crunch(MSP_codes.MSP_SET_RC_TUNING), false, save_rc_map);
+        });
+
+        $("a.sticks").click(function() {
+            var
+                windowWidth = 370,
+                windowHeight = 510;
+
+            chrome.app.window.create("/tabs/receiver_msp.html", {
+                id: "receiver_msp",
+                innerBounds: {
+                    minWidth: windowWidth, minHeight: windowHeight,
+                    width: windowWidth, height: windowHeight,
+                    maxWidth: windowWidth, maxHeight: windowHeight
+                },
+                alwaysOnTop: true
+            }, function(createdWindow) {
+                // Give the window a callback it can use to send the channels (otherwise it can't see those objects)
+                createdWindow.contentWindow.setRawRx = function(channels) {
+                    if (CONFIGURATOR.connectionValid && GUI.active_tab != 'cli') {
+                        MSP.setRawRx(channels);
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            });
+        });
+
+        // Only show the MSP control sticks if the MSP Rx feature is enabled
+        $(".sticks_btn").toggle(bit_check(BF_CONFIG.features, 14 /* RX_MSP */));
+
+        $('select[name="rx_refresh_rate"]').change(function () {
+            var plot_update_rate = parseInt($(this).val(), 10);
+
+            // save update rate
+            chrome.storage.local.set({'rx_refresh_rate': plot_update_rate});
+
+            function get_rc_data() {
+                MSP.send_message(MSP_codes.MSP_RC, false, false, update_ui);
+            }
+
+            // setup plot
+            var RX_plot_data = new Array(RC.active_channels);
+            for (var i = 0; i < RX_plot_data.length; i++) {
+                RX_plot_data[i] = [];
+            }
+
+            var samples = 0,
+                svg = d3.select("svg"),
+                RX_plot_e = $('#RX_plot'),
+                margin = {top: 20, right: 0, bottom: 10, left: 40},
+                width, height, widthScale, heightScale;
+
+            function update_receiver_plot_size() {
+                width = RX_plot_e.width() - margin.left - margin.right;
+                height = RX_plot_e.height() - margin.top - margin.bottom;
+
+                widthScale.range([0, width]);
+                heightScale.range([height, 0]);
+            }
+
+            function update_ui() {
+                // update bars with latest data
+                for (var i = 0; i < RC.active_channels; i++) {
+                    meter_fill_array[i].css('width', ((RC.channels[i] - meter_scale.min) / (meter_scale.max - meter_scale.min) * 100).clamp(0, 100) + '%');
+                    meter_label_array[i].text(RC.channels[i]);
+                }
+
+                // push latest data to the main array
+                for (var i = 0; i < RC.active_channels; i++) {
+                    RX_plot_data[i].push([samples, RC.channels[i]]);
+                }
+
+                // Remove old data from array
+                while (RX_plot_data[0].length > 300) {
+                    for (var i = 0; i < RX_plot_data.length; i++) {
+                        RX_plot_data[i].shift();
+                    }
+                }
+
+                // update required parts of the plot
+                widthScale = d3.scale.linear().
+                    domain([(samples - 299), samples]);
+
+                heightScale = d3.scale.linear().
+                    domain([800, 2200]);
+
+                update_receiver_plot_size();
+
+                var xGrid = d3.svg.axis().
+                    scale(widthScale).
+                    orient("bottom").
+                    tickSize(-height, 0, 0).
+                    tickFormat("");
+
+                var yGrid = d3.svg.axis().
+                    scale(heightScale).
+                    orient("left").
+                    tickSize(-width, 0, 0).
+                    tickFormat("");
+
+                var xAxis = d3.svg.axis().
+                    scale(widthScale).
+                    orient("bottom").
+                    tickFormat(function (d) {return d;});
+
+                var yAxis = d3.svg.axis().
+                    scale(heightScale).
+                    orient("left").
+                    tickFormat(function (d) {return d;});
+
+                var line = d3.svg.line().
+                    x(function (d) {return widthScale(d[0]);}).
+                    y(function (d) {return heightScale(d[1]);});
+
+                svg.select(".x.grid").call(xGrid);
+                svg.select(".y.grid").call(yGrid);
+                svg.select(".x.axis").call(xAxis);
+                svg.select(".y.axis").call(yAxis);
+
+                var data = svg.select("g.data"),
+                    lines = data.selectAll("path").data(RX_plot_data, function (d, i) {return i;}),
+                    newLines = lines.enter().append("path").attr("class", "line");
+                lines.attr('d', line);
+
+                samples++;
+            }
+
+            // timer initialization
+            GUI.interval_remove('receiver_pull');
+
+            // enable RC data pulling
+            GUI.interval_add('receiver_pull', get_rc_data, plot_update_rate, true);
+        });
+
+        // status data pulled via separate timer with static speed
+        GUI.interval_add('status_pull', function status_pull() {
+            MSP.send_message(MSP_codes.MSP_STATUS);
+        }, 250, true);
+
+        GUI.content_ready(callback);
+    }
+};
+
+TABS.receiver.cleanup = function (callback) {
+    $(window).off('resize', this.resize);
+
+    if (callback) callback();
+};
